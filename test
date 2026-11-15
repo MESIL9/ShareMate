@@ -32,7 +32,7 @@ public class ShareMate extends JFrame {
 
     // ================= 모델 =================
     static class Item {
-        long id; int price, deposit; String owner, kind, title, category, want, tags, desc, dong, imgs;
+        long id; int price, deposit, months; String owner, kind, title, category, want, tags, desc, dong, imgs;
         String[] photos() { return imgs.isEmpty() ? new String[0] : imgs.split("\\|"); }
         Color bg() { return kind.equals(OFFER) ? PINK : kind.equals(REQ) ? YELLOW : SKY; }
         String kindName() { return kind.equals(OFFER) ? "대여제공" : kind.equals(REQ) ? "대여요청" : "물물교환"; }
@@ -100,7 +100,7 @@ public class ShareMate extends JFrame {
                 if (a.length < 13) continue;
                 try {
                     Item i = new Item(); i.id = Long.parseLong(a[0]); i.owner = a[1]; i.kind = a[2]; i.title = a[3]; i.category = a[4];
-                    i.price = Integer.parseInt(a[5]); i.deposit = Integer.parseInt(a[6]); i.want = a[7]; i.tags = a[8]; i.desc = a[9]; i.dong = a[10]; i.imgs = a[11];
+                    i.price = Integer.parseInt(a[5]); i.deposit = Integer.parseInt(a[6]); i.want = a[7]; i.tags = a[8]; i.desc = a[9]; i.dong = a[10]; i.imgs = a[11]; i.months = a.length > 13 ? Integer.parseInt(a[13]) : 0;
                     l.add(i);
                 } catch (NumberFormatException x) { }
             }
@@ -124,6 +124,14 @@ public class ShareMate extends JFrame {
         void addView(long item) { append("views.tsv", "" + item); }
         int views(long item) { int n = 0; for (String[] a : read("views.tsv")) if (a[0].equals("" + item)) n++; return n; }
 
+        // ---- 읽음 표시 (사용자/채팅방별 마지막으로 읽은 시각) ----
+        Map<String, Long> reads(String user) {
+            Map<String, Long> m = new HashMap<>();
+            for (String[] a : read("noti.tsv")) if (a.length >= 3 && a[0].equals(user)) { try { m.merge(a[1], Long.parseLong(a[2]), Long::max); } catch (NumberFormatException x) { } }
+            return m;
+        }
+        void markRead(String user, String room) { append("noti.tsv", user, room, "" + System.currentTimeMillis()); }
+
         // ---- 채팅 ----
         List<Msg> chats() {
             List<Msg> l = new ArrayList<>();
@@ -145,17 +153,20 @@ public class ShareMate extends JFrame {
     final JPanel body = new JPanel(new BorderLayout());
     final JPanel nav;
     Timer pollTimer;
+    final List<JButton> bells = new ArrayList<>(); // 화면에 떠 있는 종 버튼들 (안 읽은 알림 수 표시)
+    String currentRoom; long lastNotified; int[] keep; // 열려 있는 채팅방 / 마지막 알림 시각 / 목록 필터 유지
 
     public ShareMate(Store store) {
         super("쉐어메이트"); st = store;
         setDefaultCloseOperation(EXIT_ON_CLOSE); setSize(400, 820); setResizable(false); setLocationRelativeTo(null);
         body.setBackground(Color.WHITE); nav = buildNav();
         add(body, BorderLayout.CENTER); add(nav, BorderLayout.SOUTH);
+        new Timer(1000, ev -> tick()).start(); // 새 채팅 감지 → 알림
         login(); setVisible(true);
     }
 
     void set(JComponent c, boolean showNav) {
-        stopPoll(); body.removeAll(); body.add(c); nav.setVisible(showNav); body.revalidate(); body.repaint();
+        stopPoll(); currentRoom = null; body.removeAll(); body.add(c); nav.setVisible(showNav); body.revalidate(); body.repaint();
     }
     void poll(Supplier<Object> sig, Runnable r) {
         stopPoll(); final Object[] last = {sig.get()};
@@ -188,7 +199,7 @@ public class ShareMate extends JFrame {
         Runnable doLogin = () -> {
             String n = st.login(id.getText().trim(), new String(pw.getPassword()));
             if (n == null) { warn("아이디 또는 비밀번호가 올바르지 않아요."); return; }
-            me = id.getText().trim(); meNick = n; nicks.put(me, n); home();
+            me = id.getText().trim(); meNick = n; nicks.put(me, n); lastNotified = System.currentTimeMillis(); home();
         };
         Runnable doSignup = () -> {
             String i = id.getText().trim(), w = new String(pw.getPassword()), n = nick.getText().trim();
@@ -197,7 +208,7 @@ public class ShareMate extends JFrame {
             if (n.isEmpty()) { warn("닉네임을 입력해 주세요."); return; }
             String err = st.signup(i, w, n);
             if (err != null) { warn(err); return; }
-            me = i; meNick = n; nicks.put(i, n); JOptionPane.showMessageDialog(this, "가입이 완료되었어요!"); home();
+            me = i; meNick = n; nicks.put(i, n); lastNotified = System.currentTimeMillis(); JOptionPane.showMessageDialog(this, "가입이 완료되었어요!"); home();
         };
         pw.addActionListener(e -> doLogin.run());
         JPanel bs = new JPanel(new GridLayout(1, 2, 8, 0)); bs.setOpaque(false); bs.setAlignmentX(0); bs.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
@@ -208,7 +219,7 @@ public class ShareMate extends JFrame {
 
     // ================= 홈 =================
     void home() {
-        JPanel p = col(); p.setBorder(new EmptyBorder(40, 20, 20, 20));
+        JPanel p = col(); p.setBorder(new EmptyBorder(12, 20, 20, 20)); p.add(homeBar()); p.add(Box.createVerticalStrut(20));
         p.add(lbl(meNick + "님, 가까운 이웃과 더 가볍게", 12, BLUE, false)); p.add(lbl("쉐어메이트", 26, Color.BLACK, true)); p.add(Box.createVerticalStrut(16));
         JTextField sf = hintField("어떤 물건이 필요하세요?");
         sf.addActionListener(e -> list(0, sf.getText(), 0));
@@ -230,23 +241,35 @@ public class ShareMate extends JFrame {
     // ================= 목록 (탭 / 검색 / 카테고리 / 찜) =================
     /** mode: 0=전체검색, 1=대여, 2=물물교환 / tab(대여만): 0=전체, 1=대여제공, 2=대여요청 */
     void list(int mode, String q0, int tab0) {
+        int[] kp = keep; keep = null; // 상세/등록에서 돌아올 때 필터 상태 유지
         int[] tab = {tab0};
         JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
         JPanel head = col();
-        head.add(header(mode == 1 ? "대여" : mode == 2 ? "물물교환" : "검색 결과", this::home));
+        head.add(header(mode == 1 ? "대여" : mode == 2 ? "물물교환" : (kp != null && kp[3] == 1 ? "찜 목록" : "검색 결과"), this::home));
         JTextField sf = hintField(mode == 2 ? "교환하고 싶은 물건을 검색해 보세요" : "빌리고 싶은 물건을 검색해 보세요"); sf.setText(q0);
         head.add(searchWrap(sf));
-        JComboBox<String> cat = new JComboBox<>(); cat.addItem("전체 카테고리"); for (String c : CATS) cat.addItem(c);
-        JCheckBox favOnly = new JCheckBox("♥ 찜만"); favOnly.setOpaque(false);
-        JLabel count = lbl("", 12, GRAY, false);
-        JPanel opt = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4)); opt.setOpaque(false); opt.setAlignmentX(0); opt.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
-        opt.add(cat); opt.add(favOnly); opt.add(count);
 
+        JComboBox<String> cat = new JComboBox<>(); cat.addItem("카테고리"); for (String c : CATS) cat.addItem(c);
+        JComboBox<String> period = new JComboBox<>(new String[]{"기간", "기간 오름차순", "기간 내림차순"});
+        JComboBox<String> priceC = new JComboBox<>(new String[]{"가격대", "가격 오름차순", "가격 내림차순"});
+        JCheckBox favOnly = new JCheckBox("♥찜만"); favOnly.setOpaque(false);
+        if (kp != null) { cat.setSelectedIndex(kp[0]); period.setSelectedIndex(kp[1]); priceC.setSelectedIndex(kp[2]); favOnly.setSelected(kp[3] == 1); }
+        cat.setPreferredSize(new Dimension(96, 28)); period.setPreferredSize(new Dimension(92, 28)); priceC.setPreferredSize(new Dimension(92, 28));
+        JPanel opt = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 4)); opt.setOpaque(false); opt.setAlignmentX(0); opt.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        opt.add(cat); if (mode != 2) { opt.add(period); opt.add(priceC); } opt.add(favOnly);
+        JLabel count = lbl("", 12, GRAY, false), sortL = lbl("최신순", 12, GRAY, false);
+        JPanel cnt = new JPanel(new BorderLayout()); cnt.setOpaque(false); cnt.setBorder(new EmptyBorder(0, 12, 0, 12)); cnt.setAlignmentX(0);
+        cnt.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26)); cnt.add(count, BorderLayout.WEST); cnt.add(sortL, BorderLayout.EAST);
+
+        Runnable again = () -> {
+            keep = new int[]{cat.getSelectedIndex(), period.getSelectedIndex(), priceC.getSelectedIndex(), favOnly.isSelected() ? 1 : 0};
+            list(mode, sf.getText(), tab[0]);
+        };
         JPanel lp = col();
         Runnable refresh = () -> {
             lp.removeAll();
-            Set<Long> favs = st.favs(me); String q = sf.getText().trim().toLowerCase(); int n = 0;
-            List<Item> all = st.items(); Collections.reverse(all); // 최신순
+            Set<Long> favs = st.favs(me); String q = sf.getText().trim().toLowerCase();
+            List<Item> all = st.items(); Collections.reverse(all); List<Item> res = new ArrayList<>(); // 기본 최신순
             for (Item it : all) {
                 if (mode == 1 && it.kind.equals(EX) || mode == 2 && !it.kind.equals(EX)) continue;
                 if (mode == 1 && tab[0] == 1 && !it.kind.equals(OFFER)) continue;
@@ -254,10 +277,22 @@ public class ShareMate extends JFrame {
                 if (cat.getSelectedIndex() > 0 && !it.category.equals(cat.getSelectedItem())) continue;
                 if (favOnly.isSelected() && !favs.contains(it.id)) continue;
                 if (!q.isEmpty() && !(it.title + it.tags + it.desc + it.want + it.category).toLowerCase().contains(q)) continue;
-                lp.add(card(it, favs, () -> detail(it, () -> list(mode, sf.getText(), tab[0]), true))); lp.add(Box.createVerticalStrut(8)); n++;
+                res.add(it);
             }
-            if (n == 0) lp.add(lbl("<html>등록된 상품이 없어요.<br>아래 '＋ 상품 등록'으로 첫 상품을 올려보세요!</html>", 12, GRAY, false));
-            count.setText("전체 " + n); lp.revalidate(); lp.repaint();
+            int ps = period.getSelectedIndex(), pc = priceC.getSelectedIndex(); String sortName = "최신순";
+            if (mode != 2 && (ps > 0 || pc > 0)) { // 기간 / 대여비 기준 정렬 (물물교환 상품은 항상 맨 뒤)
+                boolean byP = ps > 0, asc = (byP ? ps : pc) == 1;
+                res.sort((x, y) -> {
+                    boolean ex = x.kind.equals(EX), ey = y.kind.equals(EX);
+                    if (ex || ey) return ex == ey ? 0 : ex ? 1 : -1;
+                    int c = byP ? Integer.compare(x.months, y.months) : Integer.compare(x.price, y.price);
+                    return asc ? c : -c;
+                });
+                sortName = (byP ? "기간 " : "가격 ") + (asc ? "오름차순" : "내림차순");
+            }
+            for (Item it : res) { lp.add(card(it, favs, () -> detail(it, again, true))); lp.add(Box.createVerticalStrut(8)); }
+            if (res.isEmpty()) lp.add(lbl("<html>등록된 상품이 없어요.<br>아래 '＋ 상품 등록'으로 첫 상품을 올려보세요!</html>", 12, GRAY, false));
+            count.setText("전체 " + res.size()); sortL.setText(sortName); lp.revalidate(); lp.repaint();
         };
 
         if (mode == 1) { // 전체 / 대여제공 / 대여요청 탭
@@ -269,17 +304,23 @@ public class ShareMate extends JFrame {
             for (int i = 0; i < 3; i++) { final int k = i; tb[i] = flat(tn[i], () -> { tab[0] = k; style.run(); refresh.run(); }); tabs.add(tb[i]); }
             style.run(); head.add(tabs);
         }
-        head.add(opt); p.add(head, BorderLayout.NORTH);
+        head.add(opt); head.add(cnt); p.add(head, BorderLayout.NORTH);
+
+        boolean[] busy = {false}; // 기간 정렬과 가격 정렬은 동시에 선택되지 않음
         sf.addActionListener(e -> refresh.run()); cat.addActionListener(e -> refresh.run()); favOnly.addActionListener(e -> refresh.run());
+        period.addActionListener(e -> { if (!busy[0] && period.getSelectedIndex() > 0) { busy[0] = true; priceC.setSelectedIndex(0); busy[0] = false; } refresh.run(); });
+        priceC.addActionListener(e -> { if (!busy[0] && priceC.getSelectedIndex() > 0) { busy[0] = true; period.setSelectedIndex(0); busy[0] = false; } refresh.run(); });
         refresh.run();
         p.add(scroll(lp), BorderLayout.CENTER);
 
         JPanel fab = new JPanel(); fab.setBackground(Color.WHITE); fab.setBorder(new EmptyBorder(8, 0, 8, 0));
-        fab.add(btn("＋ 상품 등록", () -> register(mode == 2 ? EX : tab[0] == 2 ? REQ : OFFER, () -> list(mode, sf.getText(), tab[0])), 140, 42));
+        fab.add(btn("＋ 상품 등록", () -> register(mode == 2 ? EX : tab[0] == 2 ? REQ : OFFER, again), 140, 42));
         p.add(fab, BorderLayout.SOUTH);
         set(p, true);
         poll(() -> st.items().size(), refresh); // 다른 사용자가 올린 상품 자동 반영
     }
+
+    void listFav() { keep = new int[]{0, 0, 0, 1}; list(0, "", 0); }
 
     JPanel card(Item it, Set<Long> favs, Runnable open) {
         JPanel c = new JPanel(new BorderLayout(12, 0)); c.setBackground(it.bg()); c.setBorder(new EmptyBorder(8, 8, 8, 8));
@@ -295,8 +336,9 @@ public class ShareMate extends JFrame {
         return c;
     }
 
+    static String per(Item it) { return it.months > 0 ? " / " + it.months + "개월" : " / 대여"; }
     static String priceText(Item it) {
-        return it.kind.equals(OFFER) ? money(it.price) + " / 대여" : it.kind.equals(REQ) ? "희망 " + money(it.price) : "교환 희망 " + it.want;
+        return it.kind.equals(OFFER) ? money(it.price) + per(it) : it.kind.equals(REQ) ? "희망 " + money(it.price) + per(it) : "교환 희망 " + it.want;
     }
 
     JButton heartBtn(Item it, Set<Long> favs) {
@@ -313,7 +355,7 @@ public class ShareMate extends JFrame {
         if (countView) st.addView(it.id); // 열 때마다 조회수 +1 (파일에 기록)
         Set<Long> favs = st.favs(me);
         JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
-        p.add(header("", back, heartBtn(it, favs), flat("🏠", this::home)), BorderLayout.NORTH);
+        p.add(header("", back, heartBtn(it, favs), flat("🏠", this::home), bell(() -> detail(it, back, false))), BorderLayout.NORTH);
 
         JPanel c = col();
         String[] ph = it.photos(); int[] idx = {0};
@@ -332,7 +374,7 @@ public class ShareMate extends JFrame {
         JPanel in = col(); in.setBorder(new EmptyBorder(8, 18, 16, 18)); in.setAlignmentX(0);
         in.add(lbl("[" + it.kindName() + "] " + it.category + " · " + it.dong, 12, BLUE, true));
         in.add(lbl(it.title, 20, Color.BLACK, true)); in.add(Box.createVerticalStrut(6));
-        if (it.kind.equals(OFFER)) in.add(lbl("대여비 " + money(it.price) + "   보증금 " + money(it.deposit), 15, Color.BLACK, true));
+        if (it.kind.equals(OFFER)) in.add(lbl("대여비 " + money(it.price) + per(it) + "   보증금 " + money(it.deposit), 15, Color.BLACK, true));
         else in.add(lbl(priceText(it), 15, Color.BLACK, true));
         in.add(Box.createVerticalStrut(10)); in.add(lbl("👤 " + nick(it.owner), 12, GRAY, false)); in.add(Box.createVerticalStrut(12));
         in.add(lbl("상품 정보", 14, Color.BLACK, true)); in.add(lbl("카테고리   " + it.category, 12, Color.DARK_GRAY, false));
@@ -345,7 +387,7 @@ public class ShareMate extends JFrame {
 
         JPanel bar = new JPanel(new BorderLayout()); bar.setBorder(new MatteBorder(1, 0, 0, 0, LINE)); bar.setBackground(Color.WHITE);
         JPanel pr = new JPanel(new GridLayout(2, 1)); pr.setOpaque(false); pr.setBorder(new EmptyBorder(8, 16, 8, 0));
-        pr.add(lbl(it.kindName(), 11, GRAY, false)); pr.add(lbl(it.kind.equals(EX) ? "물물교환" : money(it.price), 16, Color.BLACK, true)); bar.add(pr, BorderLayout.WEST);
+        pr.add(lbl(it.kindName(), 11, GRAY, false)); pr.add(lbl(it.kind.equals(EX) ? "물물교환" : money(it.price) + per(it), 16, Color.BLACK, true)); bar.add(pr, BorderLayout.WEST);
         JPanel bw = new JPanel(); bw.setOpaque(false); bw.setBorder(new EmptyBorder(8, 0, 8, 16));
         if (it.owner.equals(me)) bw.add(btn("받은 문의 보기", this::chatList, 170, 42));
         else bw.add(btn(it.kind.equals(EX) ? "교환 문의" : "채팅 문의", () -> chat(it, me, () -> detail(it, back, false)), 170, 42));
@@ -380,10 +422,10 @@ public class ShareMate extends JFrame {
         String[] kinds = {OFFER, REQ, EX}; String[] kn = {"대여 제공", "대여 요청", "교환"};
         JToggleButton[] kb = new JToggleButton[3]; ButtonGroup bg = new ButtonGroup();
         JPanel tg = new JPanel(new GridLayout(1, 3, 6, 0)); tg.setOpaque(false);
-        JTextField dep = new JTextField(), fee = new JTextField(), reqFee = new JTextField(), want = new JTextField();
+        JTextField dep = new JTextField(), fee = new JTextField(), reqFee = new JTextField(), want = new JTextField(), mo = new JTextField(), mr = new JTextField();
         CardLayout cl = new CardLayout(); JPanel dyn = new JPanel(cl); dyn.setOpaque(false);
-        JPanel op = col(); op.add(field("보증금 (원)", dep)); op.add(field("대여비 (원)", fee));
-        JPanel rp = col(); rp.add(field("희망 대여비 (원)", reqFee));
+        JPanel op = col(); op.add(field("보증금 (원)", dep)); op.add(field("대여비 (원)", fee)); op.add(field("대여 기간 (개월)", mo));
+        JPanel rp = col(); rp.add(field("희망 대여비 (원)", reqFee)); rp.add(field("희망 대여 기간 (개월)", mr));
         JPanel ep = col(); ep.add(field("희망 물품", want));
         dyn.add(top(op), OFFER); dyn.add(top(rp), REQ); dyn.add(top(ep), EX);
         for (int i = 0; i < 3; i++) {
@@ -392,7 +434,7 @@ public class ShareMate extends JFrame {
             if (kinds[i].equals(initKind)) { kb[i].setSelected(true); cl.show(dyn, kinds[i]); }
         }
         f.add(field("거래 방식", tg));
-        dyn.setAlignmentX(0); dyn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140)); f.add(dyn);
+        dyn.setAlignmentX(0); dyn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 230)); f.add(dyn);
 
         JTextField tags = new JTextField(); f.add(field("해시태그 (예: #교재 #글쓰기)", tags));
         JTextArea desc = new JTextArea(5, 20); desc.setLineWrap(true); desc.setWrapStyleWord(true); f.add(field("상품 설명", new JScrollPane(desc)));
@@ -404,10 +446,12 @@ public class ShareMate extends JFrame {
             String kind = initKind; for (int i = 0; i < 3; i++) if (kb[i].isSelected()) kind = kinds[i];
             if (title.getText().trim().isEmpty()) { warn("상품 이름을 입력해 주세요."); return; }
             if (kind.equals(EX) && want.getText().trim().isEmpty()) { warn("희망 물품을 입력해 주세요."); return; }
-            int price = 0, deposit = 0;
+            int price = 0, deposit = 0, months = 0;
             try {
-                if (kind.equals(OFFER)) { deposit = num(dep.getText()); price = num(fee.getText()); } else if (kind.equals(REQ)) price = num(reqFee.getText());
+                if (kind.equals(OFFER)) { deposit = num(dep.getText()); price = num(fee.getText()); months = num(mo.getText()); }
+                else if (kind.equals(REQ)) { price = num(reqFee.getText()); months = num(mr.getText()); }
             } catch (NumberFormatException ex) { warn("금액은 숫자로 입력해 주세요."); return; }
+            if (!kind.equals(EX) && months < 1) { warn("대여 기간(개월)을 1 이상으로 입력해 주세요."); return; }
             long id = System.currentTimeMillis(); List<String> names = new ArrayList<>();
             try {
                 for (int j = 0; j < photos.size(); j++) {
@@ -416,7 +460,7 @@ public class ShareMate extends JFrame {
                 }
             } catch (IOException ex) { warn("사진을 저장하지 못했어요: " + ex.getMessage()); return; }
             st.append("items.tsv", "" + id, me, kind, title.getText().trim(), "" + cat.getSelectedItem(), "" + price, "" + deposit,
-                    want.getText().trim(), tags.getText().trim(), desc.getText().trim(), dong.getText().trim(), String.join("|", names), "" + id);
+                    want.getText().trim(), tags.getText().trim(), desc.getText().trim(), dong.getText().trim(), String.join("|", names), "" + id, "" + months);
             JOptionPane.showMessageDialog(this, "상품이 등록되었어요!");
             list(kind.equals(EX) ? 2 : 1, "", kind.equals(OFFER) ? 1 : kind.equals(REQ) ? 2 : 0);
         }, 0, 46));
@@ -436,16 +480,18 @@ public class ShareMate extends JFrame {
         p.add(head, BorderLayout.NORTH);
 
         JPanel mp = col(); mp.setBorder(new EmptyBorder(8, 10, 8, 10));
-        JScrollPane sp = scroll(mp); p.add(sp, BorderLayout.CENTER);
+        JScrollPane sp = scroll(mp); p.add(sp, BorderLayout.CENTER); long[] lastIn = {0};
         Runnable render = () -> {
-            mp.removeAll(); String lastDay = "";
+            mp.removeAll(); String lastDay = ""; long maxIn = 0;
             for (Msg m : st.chats()) {
                 if (m.item != it.id || !m.buyer.equals(buyer)) continue;
+                if (!m.sender.equals(me)) maxIn = Math.max(maxIn, m.ts);
                 String day = fmt(m.ts, "M월 d일 EEEE");
                 if (!day.equals(lastDay)) { JLabel d = new JLabel(day, SwingConstants.CENTER); d.setForeground(GRAY); d.setFont(d.getFont().deriveFont(11f)); d.setAlignmentX(0); d.setMaximumSize(new Dimension(Integer.MAX_VALUE, 26)); mp.add(d); lastDay = day; }
                 mp.add(bubbleRow(m));
             }
             mp.revalidate(); mp.repaint();
+            if (maxIn > lastIn[0]) { lastIn[0] = maxIn; st.markRead(me, it.id + "|" + buyer); } // 이 방의 알림은 읽음 처리
             SwingUtilities.invokeLater(() -> { JScrollBar b = sp.getVerticalScrollBar(); b.setValue(b.getMaximum()); });
         };
         render.run();
@@ -459,6 +505,7 @@ public class ShareMate extends JFrame {
         JPanel bar = new JPanel(new BorderLayout(8, 0)); bar.setBorder(new EmptyBorder(8, 10, 8, 10)); bar.setBackground(Color.WHITE);
         bar.add(in); bar.add(btn("전송", send, 64, 38), BorderLayout.EAST); p.add(bar, BorderLayout.SOUTH);
         set(p, false);
+        currentRoom = it.id + "|" + buyer;
         poll(() -> st.chats().size(), render); // 상대 메시지 자동 수신
         in.requestFocusInWindow();
     }
@@ -482,6 +529,90 @@ public class ShareMate extends JFrame {
             Graphics2D g2 = (Graphics2D) g.create(); g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setColor(c); g2.fillRoundRect(0, 0, getWidth(), getHeight(), 18, 18); g2.dispose(); super.paintComponent(g);
         }
+    }
+
+    // ================= 알림 (채팅이 오면 종 모양에 숫자 + 팝업) =================
+    Map<Long, Item> itemMap() { Map<Long, Item> m = new HashMap<>(); for (Item i : st.items()) m.put(i.id, i); return m; }
+
+    /** 내가 참여한 채팅방에서 상대가 보낸 메시지 */
+    List<Msg> incoming(List<Msg> all, Map<Long, Item> im) {
+        List<Msg> r = new ArrayList<>();
+        for (Msg m : all) { if (m.sender.equals(me)) continue; Item it = im.get(m.item); if (it != null && (m.buyer.equals(me) || it.owner.equals(me))) r.add(m); }
+        return r;
+    }
+    int unread() {
+        Map<String, Long> rd = st.reads(me); int n = 0;
+        for (Msg m : incoming(st.chats(), itemMap())) if (m.ts > rd.getOrDefault(m.item + "|" + m.buyer, 0L)) n++;
+        return n;
+    }
+    JButton bell(Runnable back) {
+        JButton b = flat("🔔", () -> notifications(back)); b.setFont(b.getFont().deriveFont(18f)); bells.add(b); updateBells(unread()); return b;
+    }
+    void updateBells(int n) { for (JButton b : bells) { b.setText(n > 0 ? "🔔 " + n : "🔔"); b.setForeground(n > 0 ? Color.RED : Color.BLACK); } }
+
+    JPanel homeBar() {
+        JPanel hb = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0)); hb.setOpaque(false); hb.setAlignmentX(0); hb.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        JButton hh = flat("♥", this::listFav); hh.setForeground(BLUE); hh.setFont(hh.getFont().deriveFont(22f));
+        hb.add(bell(this::home)); hb.add(hh); return hb;
+    }
+
+    /** 1초마다 새 메시지 확인 */
+    void tick() {
+        if (me == null) return;
+        bells.removeIf(b -> SwingUtilities.getWindowAncestor(b) == null);
+        List<Msg> in = incoming(st.chats(), itemMap()); Map<String, Long> rd = st.reads(me);
+        int n = 0; long maxTs = lastNotified; Msg newest = null;
+        for (Msg m : in) {
+            String room = m.item + "|" + m.buyer;
+            if (m.ts > rd.getOrDefault(room, 0L)) n++;
+            if (m.ts > lastNotified) { maxTs = Math.max(maxTs, m.ts); if (!room.equals(currentRoom) && (newest == null || m.ts > newest.ts)) newest = m; }
+        }
+        lastNotified = maxTs; updateBells(n);
+        if (newest != null) toast("💬 " + nick(newest.sender) + ": " + (newest.text.length() > 22 ? newest.text.substring(0, 22) + "…" : newest.text));
+    }
+
+    void toast(String msg) {
+        if (!isShowing()) return;
+        JWindow w = new JWindow(this); JLabel l = new JLabel(msg); l.setOpaque(true); l.setBackground(new Color(0x222222)); l.setForeground(Color.WHITE);
+        l.setBorder(new EmptyBorder(10, 16, 10, 16)); l.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        w.add(l); w.pack(); Point o = getLocationOnScreen(); w.setLocation(o.x + (getWidth() - w.getWidth()) / 2, o.y + 40); w.setAlwaysOnTop(true); w.setVisible(true);
+        l.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { w.dispose(); notifications(ShareMate.this::home); } });
+        Timer t = new Timer(3500, e -> w.dispose()); t.setRepeats(false); t.start();
+    }
+
+    void notifications(Runnable back) {
+        JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
+        JPanel nl = col(); nl.setBorder(new EmptyBorder(6, 14, 10, 14));
+        Runnable render = () -> {
+            nl.removeAll(); Map<Long, Item> im = itemMap(); Map<String, Long> rd = st.reads(me);
+            Map<String, Msg> last = new LinkedHashMap<>(); Map<String, Integer> cnt = new HashMap<>();
+            for (Msg m : incoming(st.chats(), im)) { String key = m.item + "|" + m.buyer; last.remove(key); last.put(key, m); if (m.ts > rd.getOrDefault(key, 0L)) cnt.merge(key, 1, Integer::sum); }
+            List<String> keys = new ArrayList<>(last.keySet()); Collections.reverse(keys);
+            for (String key : keys) {
+                Msg m = last.get(key); Item it = im.get(m.item); int u = cnt.getOrDefault(key, 0);
+                JPanel row = new JPanel(new BorderLayout(10, 0)); row.setBackground(u > 0 ? SKY : Color.WHITE);
+                row.setBorder(BorderFactory.createCompoundBorder(new MatteBorder(0, 0, 1, 0, LINE), new EmptyBorder(6, 6, 6, 6)));
+                row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 72)); row.setAlignmentX(0); row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                row.add(thumb(it, 52, 52), BorderLayout.WEST);
+                JPanel t = new JPanel(new GridLayout(2, 1)); t.setOpaque(false);
+                t.add(lbl(nick(m.sender) + " · " + it.title + (u > 0 ? "  ● 새 메시지 " + u : ""), 13, Color.BLACK, u > 0)); t.add(lbl(m.text, 12, GRAY, false)); row.add(t);
+                row.add(lbl(fmt(m.ts, "M/d a h:mm"), 10, GRAY, false), BorderLayout.EAST);
+                row.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { chat(it, m.buyer, () -> notifications(back)); } });
+                nl.add(row);
+            }
+            if (keys.isEmpty()) nl.add(lbl("<html>새 알림이 없어요.<br>채팅이 오면 여기와 종 모양에 알려드려요.</html>", 12, GRAY, false));
+            nl.revalidate(); nl.repaint();
+        };
+        JPanel topP = col(); topP.add(header("알림", back));
+        JPanel ar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 4)); ar.setOpaque(false); ar.setAlignmentX(0); ar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
+        ar.add(btn("모두 읽음", () -> {
+            Set<String> ks = new HashSet<>(); for (Msg m : incoming(st.chats(), itemMap())) ks.add(m.item + "|" + m.buyer);
+            for (String key : ks) st.markRead(me, key);
+            updateBells(0); render.run();
+        }, 90, 30));
+        topP.add(ar); p.add(topP, BorderLayout.NORTH);
+        render.run(); p.add(scroll(nl), BorderLayout.CENTER);
+        set(p, false); poll(() -> st.chats().size(), render);
     }
 
     // ================= 채팅 목록 / 마이 =================
@@ -572,7 +703,7 @@ public class ShareMate extends JFrame {
     }
 
     JPanel header(String title, Runnable back, JComponent... right) {
-        int w = Math.max(48, right.length * 40);
+        int w = Math.max(48, right.length * 44);
         JPanel h = new JPanel(new BorderLayout()); h.setBackground(Color.WHITE); h.setBorder(new EmptyBorder(8, 6, 8, 6));
         JButton b = flat("‹", back); b.setForeground(BLUE); b.setFont(b.getFont().deriveFont(Font.BOLD, 28f)); b.setPreferredSize(new Dimension(w, 36)); h.add(b, BorderLayout.WEST);
         JLabel l = new JLabel(title, SwingConstants.CENTER); l.setFont(l.getFont().deriveFont(Font.BOLD, 15f)); h.add(l);
