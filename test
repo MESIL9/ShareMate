@@ -1,1 +1,467 @@
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import javax.swing.border.MatteBorder;
+import javax.swing.plaf.FontUIResource;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.text.NumberFormat;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.List;
+import javax.swing.Timer;
 
+/** 쉐어메이트 - 대여 / 물물교환 앱 (Java Swing). 기능: 상품 등록, 검색, 찜하기, 채팅 */
+public class ShareMate extends JFrame {
+    // ---------- 스타일 ----------
+    static final Color BLUE = new Color(0x0B6BFF), GRAY = new Color(0x8A8F98), LIGHT = new Color(0xF2F4F8),
+            RENT_BG = new Color(0xFFFBE8), EX_BG = new Color(0xEAF2FF), LINE = new Color(0xE5E8EC);
+    static final String[] CATS = {"책/전공", "음식/유제품", "음식/육류", "전자기기", "의류/잡화", "생활/가전", "기타"};
+
+    // ---------- 모델 ----------
+    static class Item {
+        static int seq = 1;
+        int id = seq++, price, deposit, views;
+        boolean rent, fav;
+        String title, category, want = "", tags = "", desc = "", dong = "온천2동", owner = "홍길동";
+        File img; int photos;
+    }
+    static class Msg {
+        boolean mine; String text, time;
+        Msg(boolean m, String t) { mine = m; text = t; time = new SimpleDateFormat("a h:mm", Locale.KOREA).format(new Date()); }
+    }
+
+    final List<Item> items = new ArrayList<>();
+    final Map<Integer, List<Msg>> chats = new LinkedHashMap<>();
+    final JPanel body = new JPanel(new BorderLayout());
+    JPanel nav;
+
+    // ---------- 프레임 ----------
+    public ShareMate() {
+        super("쉐어메이트");
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setSize(400, 820); setResizable(false); setLocationRelativeTo(null);
+        body.setBackground(Color.WHITE);
+        nav = buildNav();
+        add(body, BorderLayout.CENTER); add(nav, BorderLayout.SOUTH);
+        seed(); home(); setVisible(true);
+    }
+
+    void seed() {
+        add(true, "대학글쓰기 교재 대여", "책/전공", 4000, 12000, "", "#교재 #글쓰기", "형광펜으로 강조표시 한 거 제외하면 깨끗해요");
+        add(true, "창의적 글쓰기와 의사소통 대여 희망", "책/전공", 4000, 0, "", "#교재", "대여 희망합니다.");
+        add(false, "바이오 그릭요거트", "음식/유제품", 0, 0, "아무거나 좋아요", "#아무거나", "유통기한 여유 있어요");
+        add(false, "코스트코 모짜렐라 치즈 5개", "음식/유제품", 0, 0, "과일류", "#과일 #음식", "코스트코 모짜렐라 치즈 5개랑 아무 과일이나 교환하고 싶어요");
+    }
+
+    Item add(boolean rent, String t, String c, int price, int dep, String want, String tags, String desc) {
+        Item i = new Item(); i.rent = rent; i.title = t; i.category = c; i.price = price; i.deposit = dep;
+        i.want = want; i.tags = tags; i.desc = desc; items.add(i); return i;
+    }
+
+    void set(JComponent c, boolean showNav) {
+        body.removeAll(); body.add(c); nav.setVisible(showNav); body.revalidate(); body.repaint();
+    }
+
+    JPanel buildNav() {
+        JPanel p = new JPanel(new GridLayout(1, 3));
+        p.setBorder(new MatteBorder(1, 0, 0, 0, LINE)); p.setBackground(Color.WHITE);
+        String[] n = {"💬 채팅", "🏠 홈", "👤 마이"};
+        Runnable[] r = {this::chatList, this::home, this::my};
+        for (int i = 0; i < 3; i++) {
+            JButton b = flat(n[i], r[i]); b.setBorder(new EmptyBorder(12, 0, 12, 0)); p.add(b);
+        }
+        return p;
+    }
+
+    // ---------- 화면: 홈 ----------
+    void home() {
+        JPanel p = col();
+        p.setBorder(new EmptyBorder(40, 20, 20, 20));
+        p.add(lbl("가까운 이웃과 더 가볍게", 12, BLUE, false));
+        p.add(lbl("쉐어메이트", 26, Color.BLACK, true));
+        p.add(Box.createVerticalStrut(16));
+        JTextField sf = new JTextField(); sf.setToolTipText("어떤 물건이 필요하세요?");
+        JPanel sb = searchBar(sf, "어떤 물건이 필요하세요?");
+        sf.addActionListener(e -> list(0, sf.getText()));
+        p.add(sb);
+        p.add(Box.createVerticalStrut(24));
+        p.add(lbl("어떻게 이용할까요?", 16, Color.BLACK, true));
+        p.add(Box.createVerticalStrut(10));
+        JPanel g = new JPanel(new GridLayout(1, 2, 12, 0)); g.setOpaque(false);
+        g.add(bigCard("📚🎒", "대여", RENT_BG, () -> list(1, "")));
+        g.add(bigCard("🔄🧸", "물물교환", EX_BG, () -> list(2, "")));
+        g.setAlignmentX(0); g.setMaximumSize(new Dimension(Integer.MAX_VALUE, 170));
+        p.add(g);
+        set(top(p), true);
+    }
+
+    JComponent bigCard(String emoji, String text, Color bg, Runnable r) {
+        JButton b = new JButton("<html><center><span style='font-size:34px'>" + emoji + "</span><br><br>" + text + "</center></html>");
+        b.setBackground(bg); b.setOpaque(true); b.setBorder(BorderFactory.createLineBorder(LINE));
+        b.setFocusPainted(false); b.addActionListener(e -> r.run()); return b;
+    }
+
+    // ---------- 화면: 목록 (검색 / 카테고리 / 찜 필터) ----------
+    void list(int mode, String q0) {
+        JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
+        JPanel head = col();
+        head.add(header(mode == 1 ? "대여" : mode == 2 ? "물물교환" : "검색 결과", this::home, null));
+        JTextField sf = new JTextField(q0);
+        JPanel sb = searchBar(sf, "빌리고 싶은 물건을 검색해 보세요"); sb.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        head.add(sb);
+        JComboBox<String> cat = new JComboBox<>(); cat.addItem("전체 카테고리"); for (String c : CATS) cat.addItem(c);
+        JCheckBox favOnly = new JCheckBox("♥ 찜만 보기"); favOnly.setOpaque(false);
+        JLabel count = lbl("", 12, GRAY, false);
+        JPanel opt = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4)); opt.setOpaque(false);
+        opt.add(cat); opt.add(favOnly); opt.add(count); opt.setAlignmentX(0);
+        opt.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        head.add(opt);
+        p.add(head, BorderLayout.NORTH);
+
+        JPanel lp = col();
+        Runnable refresh = new Runnable() {
+            public void run() {
+                lp.removeAll();
+                String q = sf.getText().trim().toLowerCase(); int n = 0;
+                for (int i = items.size() - 1; i >= 0; i--) { // 최신순
+                    Item it = items.get(i);
+                    if (mode == 1 && !it.rent || mode == 2 && it.rent) continue;
+                    if (cat.getSelectedIndex() > 0 && !it.category.equals(cat.getSelectedItem())) continue;
+                    if (favOnly.isSelected() && !it.fav) continue;
+                    String hay = (it.title + it.tags + it.desc + it.want + it.category).toLowerCase();
+                    if (!q.isEmpty() && !hay.contains(q)) continue;
+                    lp.add(card(it, () -> detail(it, () -> list(mode, sf.getText())))); lp.add(Box.createVerticalStrut(8)); n++;
+                }
+                if (n == 0) lp.add(lbl("검색 결과가 없어요", 13, GRAY, false));
+                count.setText("전체 " + n); lp.revalidate(); lp.repaint();
+            }
+        };
+        sf.addActionListener(e -> refresh.run()); cat.addActionListener(e -> refresh.run()); favOnly.addActionListener(e -> refresh.run());
+        refresh.run();
+        JScrollPane sp = new JScrollPane(top(lp)); sp.setBorder(null); sp.getVerticalScrollBar().setUnitIncrement(16);
+        p.add(sp, BorderLayout.CENTER);
+
+        JPanel fab = new JPanel(); fab.setBackground(Color.WHITE); fab.setBorder(new EmptyBorder(8, 0, 8, 0));
+        fab.add(btn("＋ 상품 등록", () -> register(mode == 2 ? 2 : 1, () -> list(mode, sf.getText())), 140, 42));
+        p.add(fab, BorderLayout.SOUTH);
+        set(p, true);
+    }
+
+    /** 상품 카드 (찜 토글 포함) */
+    JPanel card(Item it, Runnable open) {
+        JPanel c = new JPanel(new BorderLayout(12, 0)); c.setBackground(it.rent ? RENT_BG : EX_BG);
+        c.setBorder(new EmptyBorder(8, 8, 8, 8)); c.setMaximumSize(new Dimension(Integer.MAX_VALUE, 104)); c.setAlignmentX(0);
+        c.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        c.add(thumb(it, 88, 88), BorderLayout.WEST);
+        JPanel info = new JPanel(); info.setOpaque(false); info.setLayout(new BoxLayout(info, BoxLayout.Y_AXIS));
+        String price = it.rent ? money(it.price) : "교환 희망 " + it.want;
+        info.add(lbl(price, 15, BLUE, true)); info.add(lbl(it.title, 13, Color.BLACK, false));
+        info.add(lbl(it.rent ? "보증금 " + money(it.deposit) : it.tags, 11, GRAY, false));
+        info.add(lbl((it.rent ? "대여 가능" : "교환 가능") + " · " + it.dong, 11, BLUE, false));
+        c.add(info, BorderLayout.CENTER);
+        JButton h = heartBtn(it); JPanel east = new JPanel(new BorderLayout()); east.setOpaque(false); east.add(h, BorderLayout.NORTH);
+        c.add(east, BorderLayout.EAST);
+        c.addMouseListener(new java.awt.event.MouseAdapter() { public void mouseClicked(java.awt.event.MouseEvent e) { open.run(); } });
+        return c;
+    }
+
+    JButton heartBtn(Item it) {
+        JButton h = flat(it.fav ? "♥" : "♡", null); h.setForeground(BLUE); h.setFont(h.getFont().deriveFont(20f));
+        h.addActionListener(e -> { it.fav = !it.fav; h.setText(it.fav ? "♥" : "♡"); });
+        return h;
+    }
+
+    // ---------- 화면: 상세 ----------
+    void detail(Item it, Runnable back) {
+        it.views++;
+        JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
+        p.add(header("", back, heartBtn(it)), BorderLayout.NORTH);
+        JPanel c = col(); c.setBorder(new EmptyBorder(0, 0, 16, 0));
+        JComponent im = thumb(it, 400, 240); im.setAlignmentX(0); c.add(im);
+        JPanel in = col(); in.setBorder(new EmptyBorder(12, 18, 0, 18)); in.setAlignmentX(0);
+        in.add(lbl((it.rent ? "[대여] " : "[물물교환] ") + it.category + " · " + it.dong, 12, BLUE, true));
+        in.add(lbl(it.title, 20, Color.BLACK, true));
+        in.add(Box.createVerticalStrut(6));
+        in.add(lbl(it.rent ? "대여비 " + money(it.price) + "   보증금 " + money(it.deposit) : "교환 희망  " + it.want, 15, Color.BLACK, true));
+        in.add(Box.createVerticalStrut(10));
+        in.add(lbl("👤 " + it.owner + " · 충남대 · 학교 인증 완료", 12, GRAY, false));
+        in.add(Box.createVerticalStrut(14));
+        in.add(lbl("상품 정보", 14, Color.BLACK, true));
+        in.add(lbl("카테고리   " + it.category, 12, Color.DARK_GRAY, false));
+        if (!it.tags.isEmpty()) in.add(lbl("해시태그   " + it.tags, 12, Color.DARK_GRAY, false));
+        in.add(Box.createVerticalStrut(14));
+        in.add(lbl("<html><body style='width:330px'>" + esc(it.desc) + "</body></html>", 13, Color.BLACK, false));
+        in.add(Box.createVerticalStrut(14));
+        in.add(lbl("관심 " + (it.fav ? 1 : 0) + " · 채팅 " + (chats.containsKey(it.id) ? 1 : 0) + " · 조회 " + it.views, 11, GRAY, false));
+        c.add(in);
+        JScrollPane sp = new JScrollPane(top(c)); sp.setBorder(null); p.add(sp, BorderLayout.CENTER);
+        JPanel bar = new JPanel(new BorderLayout()); bar.setBorder(new MatteBorder(1, 0, 0, 0, LINE)); bar.setBackground(Color.WHITE);
+        JPanel pr = new JPanel(new GridLayout(2, 1)); pr.setOpaque(false); pr.setBorder(new EmptyBorder(8, 16, 8, 0));
+        pr.add(lbl(it.rent ? "대여 가격" : "교환", 11, GRAY, false)); pr.add(lbl(it.rent ? money(it.price) : "물물교환", 16, Color.BLACK, true));
+        bar.add(pr, BorderLayout.WEST);
+        JPanel bw = new JPanel(); bw.setOpaque(false); bw.setBorder(new EmptyBorder(8, 0, 8, 16));
+        bw.add(btn(it.rent ? "채팅 문의" : "교환 문의", () -> chat(it, () -> detail(it, back)), 180, 42)); bar.add(bw, BorderLayout.EAST);
+        p.add(bar, BorderLayout.SOUTH);
+        set(p, false);
+    }
+
+    // ---------- 화면: 상품 등록 ----------
+    void register(int initMode, Runnable back) {
+        JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
+        p.add(header("상품 등록", back, null), BorderLayout.NORTH);
+        JPanel f = col(); f.setBorder(new EmptyBorder(8, 18, 8, 18));
+
+        List<File> photos = new ArrayList<>();
+        JLabel photoInfo = lbl("사진 0 / 10", 12, GRAY, false);
+        JButton pb = btn("📷 사진 선택", null, 120, 36);
+        pb.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser(); fc.setMultiSelectionEnabled(true);
+            fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("이미지", "jpg", "jpeg", "png", "gif"));
+            if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                for (File x : fc.getSelectedFiles()) if (photos.size() < 10) photos.add(x);
+                photoInfo.setText("사진 " + photos.size() + " / 10 (대표: " + photos.get(0).getName() + ")");
+            }
+        });
+        JPanel pr = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0)); pr.setOpaque(false); pr.add(pb); pr.add(photoInfo);
+        f.add(field("상품 사진", pr));
+
+        JTextField title = new JTextField();
+        f.add(field("상품 이름", title));
+        JComboBox<String> cat = new JComboBox<>(CATS); f.add(field("카테고리", cat));
+
+        JToggleButton rb = new JToggleButton("대여"), eb = new JToggleButton("교환");
+        ButtonGroup bg = new ButtonGroup(); bg.add(rb); bg.add(eb);
+        JPanel tg = new JPanel(new GridLayout(1, 2, 6, 0)); tg.setOpaque(false); tg.add(rb); tg.add(eb);
+        f.add(field("거래 방식", tg));
+
+        JTextField dep = new JTextField(), fee = new JTextField(), want = new JTextField(), tags = new JTextField();
+        CardLayout cl = new CardLayout(); JPanel dyn = new JPanel(cl); dyn.setOpaque(false);
+        JPanel rp = col(); rp.add(field("보증금 (원)", dep)); rp.add(field("대여비 (원)", fee));
+        JPanel ep = col(); ep.add(field("희망 물품", want)); ep.add(field("해시태그", tags));
+        dyn.add(top(rp), "rent"); dyn.add(top(ep), "ex"); dyn.setAlignmentX(0); dyn.setMaximumSize(new Dimension(Integer.MAX_VALUE, 130));
+        rb.addActionListener(e -> cl.show(dyn, "rent")); eb.addActionListener(e -> cl.show(dyn, "ex"));
+        if (initMode == 2) { eb.setSelected(true); cl.show(dyn, "ex"); } else { rb.setSelected(true); cl.show(dyn, "rent"); }
+        f.add(dyn);
+
+        JTextArea desc = new JTextArea(5, 20); desc.setLineWrap(true); desc.setWrapStyleWord(true);
+        f.add(field("상품 설명", new JScrollPane(desc)));
+        f.add(lbl("거래 동네   대전광역시 유성구 온천2동", 12, GRAY, false));
+        JScrollPane sp = new JScrollPane(top(f)); sp.setBorder(null); sp.getVerticalScrollBar().setUnitIncrement(16);
+        p.add(sp, BorderLayout.CENTER);
+
+        JPanel bw = new JPanel(new BorderLayout()); bw.setBorder(new EmptyBorder(8, 18, 12, 18)); bw.setBackground(Color.WHITE);
+        bw.add(btn("등록하기", () -> {
+            if (title.getText().trim().isEmpty()) { warn("상품 이름을 입력해 주세요."); return; }
+            boolean rent = rb.isSelected();
+            try {
+                Item it = new Item(); it.rent = rent; it.title = title.getText().trim(); it.category = (String) cat.getSelectedItem();
+                it.desc = desc.getText().trim(); it.owner = "나";
+                if (rent) { it.deposit = num(dep.getText()); it.price = num(fee.getText()); }
+                else {
+                    if (want.getText().trim().isEmpty()) { warn("희망 물품을 입력해 주세요."); return; }
+                    it.want = want.getText().trim(); it.tags = tags.getText().trim();
+                }
+                if (!photos.isEmpty()) { it.img = photos.get(0); it.photos = photos.size(); }
+                items.add(it);
+                JOptionPane.showMessageDialog(this, "상품이 등록되었어요!");
+                list(rent ? 1 : 2, "");
+            } catch (NumberFormatException ex) { warn("금액은 숫자로 입력해 주세요."); }
+        }, 0, 46));
+        p.add(bw, BorderLayout.SOUTH);
+        set(p, false);
+    }
+
+    // ---------- 화면: 채팅 ----------
+    void chat(Item it, Runnable back) {
+        List<Msg> msgs = chats.computeIfAbsent(it.id, k -> new ArrayList<>());
+        JPanel p = new JPanel(new BorderLayout()); p.setBackground(Color.WHITE);
+        JPanel head = col(); head.add(header(it.owner, back, null));
+        JPanel sum = new JPanel(new BorderLayout(10, 0)); sum.setBackground(LIGHT); sum.setBorder(new EmptyBorder(8, 12, 8, 12));
+        sum.add(thumb(it, 48, 48), BorderLayout.WEST);
+        JPanel si = new JPanel(new GridLayout(2, 1)); si.setOpaque(false);
+        si.add(lbl(it.title, 13, Color.BLACK, true)); si.add(lbl(it.rent ? "판매 중 · " + money(it.price) : "교환 가능 · " + it.want, 12, GRAY, false));
+        sum.add(si); sum.setAlignmentX(0); sum.setMaximumSize(new Dimension(Integer.MAX_VALUE, 66)); head.add(sum);
+        p.add(head, BorderLayout.NORTH);
+
+        JPanel mp = col(); mp.setBorder(new EmptyBorder(8, 10, 8, 10));
+        JScrollPane sp = new JScrollPane(top(mp)); sp.setBorder(null); p.add(sp, BorderLayout.CENTER);
+        Runnable render = () -> {
+            mp.removeAll();
+            for (Msg m : msgs) mp.add(bubbleRow(m));
+            mp.revalidate(); mp.repaint();
+            SwingUtilities.invokeLater(() -> { JScrollBar b = sp.getVerticalScrollBar(); b.setValue(b.getMaximum()); });
+        };
+        render.run();
+
+        JTextField in = new JTextField(); in.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(LINE), new EmptyBorder(8, 10, 8, 10)));
+        Runnable send = () -> {
+            String t = in.getText().trim(); if (t.isEmpty()) return;
+            msgs.add(new Msg(true, t)); in.setText(""); render.run();
+            Timer tm = new Timer(900, ev -> { msgs.add(new Msg(false, autoReply(t))); render.run(); });
+            tm.setRepeats(false); tm.start();
+        };
+        in.addActionListener(e -> send.run());
+        JPanel bar = new JPanel(new BorderLayout(8, 0)); bar.setBorder(new EmptyBorder(8, 10, 8, 10)); bar.setBackground(Color.WHITE);
+        bar.add(in); bar.add(btn("전송", send, 64, 38), BorderLayout.EAST);
+        p.add(bar, BorderLayout.SOUTH);
+        set(p, false);
+    }
+
+    String autoReply(String t) {
+        if (t.contains("가능")) return "네, 가능해요! 몇 시쯤 오실 수 있으세요?";
+        if (t.contains("시")) return "좋아요, 그 시간에 교양관 3층 앞에서 만나요 :)";
+        if (t.contains("가격") || t.contains("얼마")) return "게시글에 적힌 가격 그대로예요.";
+        return "네, 확인했어요!";
+    }
+
+    JComponent bubbleRow(Msg m) {
+        JPanel r = new JPanel(new FlowLayout(m.mine ? FlowLayout.RIGHT : FlowLayout.LEFT, 4, 4)); r.setOpaque(false);
+        JLabel tm = lbl(m.time, 10, GRAY, false);
+        JComponent b = new Bubble(m.text, m.mine);
+        if (m.mine) { r.add(tm); r.add(b); } else { r.add(b); r.add(tm); }
+        r.setMaximumSize(new Dimension(Integer.MAX_VALUE, r.getPreferredSize().height + 6)); r.setAlignmentX(0);
+        return r;
+    }
+
+    static class Bubble extends JPanel {
+        final Color c;
+        Bubble(String t, boolean mine) {
+            c = mine ? new Color(0xDCEBFF) : LIGHT; setOpaque(false); setLayout(new BorderLayout()); setBorder(new EmptyBorder(8, 12, 8, 12));
+            JLabel l = new JLabel(); int w = Math.min(200, l.getFontMetrics(l.getFont()).stringWidth(t) + 8);
+            l.setText("<html><body style='width:" + w + "px'>" + esc(t) + "</body></html>"); add(l);
+        }
+        @Override protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create(); g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(c); g2.fillRoundRect(0, 0, getWidth(), getHeight(), 18, 18); g2.dispose(); super.paintComponent(g);
+        }
+    }
+
+    // ---------- 화면: 채팅 목록 / 마이 ----------
+    void chatList() {
+        JPanel c = col(); c.setBorder(new EmptyBorder(10, 14, 10, 14));
+        c.add(lbl("채팅", 20, Color.BLACK, true)); c.add(Box.createVerticalStrut(10));
+        if (chats.isEmpty()) c.add(lbl("아직 채팅이 없어요. 상품에서 '채팅 문의'를 눌러보세요.", 12, GRAY, false));
+        List<Integer> ids = new ArrayList<>(chats.keySet()); Collections.reverse(ids);
+        for (int id : ids) {
+            Item it = byId(id); List<Msg> ms = chats.get(id); if (it == null) continue;
+            JPanel row = new JPanel(new BorderLayout(10, 0)); row.setBackground(Color.WHITE); row.setBorder(new MatteBorder(0, 0, 1, 0, LINE));
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 64)); row.setAlignmentX(0); row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            row.add(thumb(it, 52, 52), BorderLayout.WEST);
+            JPanel t = new JPanel(new GridLayout(2, 1)); t.setOpaque(false);
+            t.add(lbl(it.owner + " · " + it.title, 13, Color.BLACK, true));
+            t.add(lbl(ms.isEmpty() ? "대화를 시작해 보세요" : ms.get(ms.size() - 1).text, 12, GRAY, false)); row.add(t);
+            row.addMouseListener(new java.awt.event.MouseAdapter() { public void mouseClicked(java.awt.event.MouseEvent e) { chat(it, ShareMate.this::chatList); } });
+            c.add(row);
+        }
+        set(wrapScroll(c), true);
+    }
+
+    void my() {
+        JPanel c = col(); c.setBorder(new EmptyBorder(10, 14, 10, 14));
+        c.add(lbl("마이", 20, Color.BLACK, true)); c.add(Box.createVerticalStrut(10));
+        c.add(lbl("♥ 찜한 상품", 15, BLUE, true)); c.add(Box.createVerticalStrut(6));
+        boolean any = false;
+        for (Item it : items) if (it.fav) { c.add(card(it, () -> detail(it, this::my))); c.add(Box.createVerticalStrut(8)); any = true; }
+        if (!any) c.add(lbl("찜한 상품이 없어요", 12, GRAY, false));
+        c.add(Box.createVerticalStrut(14)); c.add(lbl("📦 내가 등록한 상품", 15, BLUE, true)); c.add(Box.createVerticalStrut(6));
+        any = false;
+        for (Item it : items) if (it.owner.equals("나")) { c.add(card(it, () -> detail(it, this::my))); c.add(Box.createVerticalStrut(8)); any = true; }
+        if (!any) c.add(lbl("등록한 상품이 없어요", 12, GRAY, false));
+        set(wrapScroll(c), true);
+    }
+
+    // ---------- 공통 유틸 ----------
+    Item byId(int id) { for (Item i : items) if (i.id == id) return i; return null; }
+    static String money(int n) { return NumberFormat.getInstance().format(n) + "원"; }
+    static String esc(String s) { return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>"); }
+    static int num(String s) { s = s.trim().replace(",", ""); return s.isEmpty() ? 0 : Integer.parseInt(s); }
+    void warn(String m) { JOptionPane.showMessageDialog(this, m, "알림", JOptionPane.WARNING_MESSAGE); }
+
+    static JPanel col() { JPanel p = new JPanel(); p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS)); p.setBackground(Color.WHITE); return p; }
+    static JPanel top(JComponent c) { JPanel w = new JPanel(new BorderLayout()); w.setBackground(Color.WHITE); w.add(c, BorderLayout.NORTH); return w; }
+    static JScrollPane wrapScroll(JComponent c) { JScrollPane s = new JScrollPane(top(c)); s.setBorder(null); return s; }
+
+    static JLabel lbl(String t, int size, Color c, boolean bold) {
+        JLabel l = new JLabel(t); l.setFont(l.getFont().deriveFont(bold ? Font.BOLD : Font.PLAIN, (float) size));
+        l.setForeground(c); l.setAlignmentX(0); l.setBorder(new EmptyBorder(2, 0, 2, 0)); return l;
+    }
+
+    static JButton flat(String t, Runnable r) {
+        JButton b = new JButton(t); b.setBorderPainted(false); b.setContentAreaFilled(false); b.setFocusPainted(false);
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)); if (r != null) b.addActionListener(e -> r.run()); return b;
+    }
+
+    /** 둥근 파란 버튼. w==0 이면 가로 전체 */
+    static JButton btn(String t, Runnable r, int w, int h) {
+        JButton b = new JButton(t) {
+            @Override protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create(); g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getModel().isPressed() ? BLUE.darker() : BLUE); g2.fillRoundRect(0, 0, getWidth(), getHeight(), 22, 22); g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        b.setForeground(Color.WHITE); b.setFont(b.getFont().deriveFont(Font.BOLD)); b.setContentAreaFilled(false);
+        b.setBorderPainted(false); b.setFocusPainted(false); b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        b.setPreferredSize(new Dimension(w == 0 ? 100 : w, h)); if (r != null) b.addActionListener(e -> r.run()); return b;
+    }
+
+    JPanel header(String title, Runnable back, JComponent right) {
+        JPanel h = new JPanel(new BorderLayout()); h.setBackground(Color.WHITE); h.setBorder(new EmptyBorder(8, 6, 8, 6));
+        JButton b = flat("‹", back); b.setForeground(BLUE); b.setFont(b.getFont().deriveFont(Font.BOLD, 28f)); h.add(b, BorderLayout.WEST);
+        JLabel l = new JLabel(title, SwingConstants.CENTER); l.setFont(l.getFont().deriveFont(Font.BOLD, 15f)); h.add(l);
+        JPanel r = new JPanel(); r.setOpaque(false); if (right != null) r.add(right); r.setPreferredSize(new Dimension(48, 30)); h.add(r, BorderLayout.EAST);
+        h.setAlignmentX(0); h.setMaximumSize(new Dimension(Integer.MAX_VALUE, 50)); return h;
+    }
+
+    JPanel searchBar(JTextField tf, String hint) {
+        tf.setBorder(new EmptyBorder(6, 6, 6, 6)); tf.setOpaque(false); tf.setToolTipText(hint);
+        JLabel ph = lbl(hint, 12, GRAY, false);
+        JPanel p = new JPanel(new BorderLayout(6, 0)) {
+            @Override public void paint(Graphics g) { super.paint(g); }
+        };
+        p.setBackground(LIGHT); p.setBorder(new EmptyBorder(4, 12, 4, 12));
+        p.add(new JLabel("🔍"), BorderLayout.WEST);
+        tf.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            void u() { ph.setVisible(tf.getText().isEmpty()); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { u(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { u(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { u(); }
+        });
+        ph.setVisible(tf.getText().isEmpty());
+        JPanel center = new JPanel(new BorderLayout()); center.setOpaque(false);
+        center.add(tf); p.add(center); p.add(ph, BorderLayout.SOUTH); ph.setBorder(new EmptyBorder(0, 6, 0, 0));
+        p.setAlignmentX(0); p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 64)); return p;
+    }
+
+    JPanel field(String label, JComponent c) {
+        JPanel p = new JPanel(new BorderLayout(0, 4)); p.setOpaque(false); p.setBorder(new EmptyBorder(6, 0, 6, 0));
+        p.add(lbl(label, 13, Color.BLACK, true), BorderLayout.NORTH); p.add(c);
+        p.setAlignmentX(0); p.setMaximumSize(new Dimension(Integer.MAX_VALUE, p.getPreferredSize().height + 8)); return p;
+    }
+
+    JComponent thumb(Item it, int w, int h) {
+        ImageIcon ic = it.img != null ? cover(it.img, w, h) : null;
+        JLabel l = ic != null ? new JLabel(ic) : new JLabel(it.rent ? "📚" : "🍽", SwingConstants.CENTER);
+        l.setOpaque(true); l.setBackground(new Color(0xDDE3EA)); l.setFont(l.getFont().deriveFont(26f));
+        l.setPreferredSize(new Dimension(w, h)); return l;
+    }
+
+    static ImageIcon cover(File f, int w, int h) {
+        try {
+            BufferedImage src = javax.imageio.ImageIO.read(f); if (src == null) return null;
+            double s = Math.max((double) w / src.getWidth(), (double) h / src.getHeight());
+            int nw = (int) (src.getWidth() * s), nh = (int) (src.getHeight() * s);
+            BufferedImage o = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB); Graphics2D g = o.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(src, (w - nw) / 2, (h - nh) / 2, nw, nh, null); g.dispose(); return new ImageIcon(o);
+        } catch (Exception e) { return null; }
+    }
+
+    public static void main(String[] a) {
+        FontUIResource fr = new FontUIResource("Malgun Gothic", Font.PLAIN, 13); // 없으면 Dialog로 대체됨
+        for (Object k : Collections.list(UIManager.getDefaults().keys()))
+            if (UIManager.get(k) instanceof FontUIResource) UIManager.put(k, fr);
+        SwingUtilities.invokeLater(ShareMate::new);
+    }
+}
