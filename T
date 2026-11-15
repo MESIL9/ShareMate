@@ -1,0 +1,817 @@
+import javax.swing.*;
+import javax.swing.border.*;
+import javax.swing.event.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.text.DecimalFormat;
+import java.util.*;
+import java.util.List;
+
+/**
+ * ShareMate - Java Swing campus rental & exchange marketplace
+ *
+ * 실행:
+ *   javac ShareMateApp.java
+ *   java ShareMateApp
+ *
+ * 상품과 채팅 기록은 실행 폴더의 sharemate_data.dat에 저장됩니다.
+ */
+public class ShareMateApp extends JFrame {
+    private static final Color NAVY = new Color(35, 48, 68);
+    private static final Color BLUE = new Color(76, 111, 255);
+    private static final Color PALE = new Color(244, 246, 250);
+    private static final Color TEXT = new Color(40, 45, 55);
+    private static final Color MUTED = new Color(130, 137, 150);
+    private static final File DATA_FILE = new File("sharemate_data.dat");
+
+    private final CardLayout cardLayout = new CardLayout();
+    private final JPanel root = new JPanel(cardLayout);
+    private final List<Product> products = new ArrayList<Product>();
+    private final JPanel productListPanel = new JPanel();
+    private final JTextField searchField = new JTextField();
+    private String currentCategory = "전체";
+    private String currentPage = "home";
+    private Product selectedProduct;
+    private JLabel listTitle;
+    private JLabel homeCountLabel;
+
+    public ShareMateApp() {
+        super("쉐어메이트 | ShareMate");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setMinimumSize(new Dimension(390, 650));
+        setSize(440, 820);
+        setLocationRelativeTo(null);
+        loadData();
+        if (products.isEmpty()) addSampleProducts();
+
+        root.setBackground(PALE);
+        root.add(createHomePage(), "home");
+        root.add(createMarketPage(), "market");
+        root.add(createMyPage(), "mypage");
+        setContentPane(root);
+        showPage("home");
+        setVisible(true);
+    }
+
+    // -------------------- 데이터 --------------------
+
+    private static class Product implements Serializable {
+        private static final long serialVersionUID = 1L;
+        String name, category, type, description, condition, owner, imagePath;
+        int price, deposit;
+        boolean favorite;
+        Date createdAt;
+        List<String> messages = new ArrayList<String>();
+
+        Product(String name, String category, String type, String description,
+                String condition, int price, int deposit, String imagePath) {
+            this.name = name;
+            this.category = category;
+            this.type = type;
+            this.description = description;
+            this.condition = condition;
+            this.price = price;
+            this.deposit = deposit;
+            this.imagePath = imagePath;
+            this.owner = "충남대 학생";
+            this.createdAt = new Date();
+        }
+    }
+
+    private void addSampleProducts() {
+        products.add(new Product("전공 서적 - 자료구조", "도서", "대여", "한 학기 동안 사용하기 좋은 자료구조 전공 서적입니다.", "좋음", 4000, 4000, ""));
+        products.add(new Product("미니 전기포트", "생활용품", "대여", "기숙사에서 사용하기 좋은 소형 전기포트입니다.", "매우 좋음", 2000, 5000, ""));
+        products.add(new Product("실습용 공학 계산기", "학업/실습", "물물교환", "계산기 교환 희망합니다. 원하시는 물품을 채팅으로 알려주세요.", "좋음", 0, 0, ""));
+        products.add(new Product("미개봉 파일夹 세트", "문구", "물물교환", "사용하지 않은 파일夹 세트입니다. 다른 문구류와 교환해요.", "새 상품", 0, 0, ""));
+        saveData();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void loadData() {
+        if (!DATA_FILE.exists()) return;
+        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(DATA_FILE))) {
+            Object obj = in.readObject();
+            if (obj instanceof ArrayList) products.addAll((ArrayList<Product>) obj);
+        } catch (Exception e) {
+            System.err.println("저장 데이터를 불러오지 못했습니다: " + e.getMessage());
+        }
+    }
+
+    private void saveData() {
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(DATA_FILE))) {
+            out.writeObject(new ArrayList<Product>(products));
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "데이터 저장에 실패했습니다.\n" + e.getMessage());
+        }
+    }
+
+    // -------------------- 공통 UI --------------------
+
+    private JPanel pagePanel() {
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(PALE);
+        return p;
+    }
+
+    private JLabel label(String text, int size, boolean bold, Color color) {
+        JLabel l = new JLabel(text);
+        l.setFont(new Font("맑은 고딕", bold ? Font.BOLD : Font.PLAIN, size));
+        l.setForeground(color);
+        return l;
+    }
+
+    private JButton button(String text, Color bg, Color fg) {
+        JButton b = new JButton(text);
+        b.setFont(new Font("맑은 고딕", Font.BOLD, 14));
+        b.setBackground(bg);
+        b.setForeground(fg);
+        b.setFocusPainted(false);
+        b.setBorder(new EmptyBorder(12, 16, 12, 16));
+        b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        return b;
+    }
+
+    private JPanel header(String title, boolean back) {
+        JPanel h = new JPanel(new BorderLayout());
+        h.setBackground(Color.WHITE);
+        h.setBorder(new EmptyBorder(15, 18, 15, 18));
+        if (back) {
+            JButton b = button("‹", Color.WHITE, NAVY);
+            b.setFont(new Font("맑은 고딕", Font.BOLD, 27));
+            b.setBorder(new EmptyBorder(0, 5, 0, 15));
+            b.addActionListener(e -> showPage("market"));
+            h.add(b, BorderLayout.WEST);
+        }
+        h.add(label(title, 20, true, NAVY), BorderLayout.CENTER);
+        return h;
+    }
+
+    private JPanel bottomNav() {
+        JPanel nav = new JPanel(new GridLayout(1, 3));
+        nav.setBackground(Color.WHITE);
+        nav.setBorder(new MatteBorder(1, 0, 0, 0, new Color(230, 232, 237)));
+        String[] names = {"♡  채팅", "⌂  홈", "♙  마이"};
+        String[] pages = {"market", "home", "mypage"};
+        for (int i = 0; i < names.length; i++) {
+            final String page = pages[i];
+            JButton b = new JButton(names[i]);
+            b.setFont(new Font("맑은 고딕", Font.BOLD, 13));
+            b.setForeground(currentPage.equals(page) ? BLUE : MUTED);
+            b.setBackground(Color.WHITE);
+            b.setBorder(new EmptyBorder(14, 4, 14, 4));
+            b.setFocusPainted(false);
+            b.addActionListener(e -> showPage(page));
+            nav.add(b);
+        }
+        return nav;
+    }
+
+    private void showPage(String page) {
+        currentPage = page;
+        root.removeAll();
+        if ("home".equals(page)) {
+            root.add(createHomePage(), "home");
+        } else if ("market".equals(page)) {
+            root.add(createMarketPage(), "market");
+        } else {
+            root.add(createMyPage(), "mypage");
+        }
+        cardLayout.show(root, page);
+        root.revalidate();
+        root.repaint();
+    }
+
+    // -------------------- 홈 --------------------
+
+    private JPanel createHomePage() {
+        JPanel page = pagePanel();
+        JPanel top = new JPanel(new BorderLayout());
+        top.setBackground(Color.WHITE);
+        top.setBorder(new EmptyBorder(18, 20, 20, 20));
+
+        JPanel topLine = new JPanel(new BorderLayout());
+        topLine.setBackground(Color.WHITE);
+        JLabel brand = label("share mate", 23, true, NAVY);
+        JLabel icons = label("♧     ♡", 22, false, NAVY);
+        topLine.add(brand, BorderLayout.WEST);
+        topLine.add(icons, BorderLayout.EAST);
+        top.add(topLine, BorderLayout.NORTH);
+
+        JPanel search = new JPanel(new BorderLayout(8, 0));
+        search.setBackground(PALE);
+        search.setBorder(new CompoundBorder(new LineBorder(new Color(225, 228, 235), 1, true),
+                new EmptyBorder(4, 12, 4, 8)));
+        JTextField homeSearch = new JTextField();
+        homeSearch.setFont(new Font("맑은 고딕", Font.PLAIN, 14));
+        homeSearch.setBorder(null);
+        homeSearch.setBackground(PALE);
+        homeSearch.setToolTipText("찾고 싶은 상품을 검색하세요");
+        JButton go = button("⌕", PALE, NAVY);
+        go.setBorder(new EmptyBorder(4, 8, 4, 8));
+        go.addActionListener(e -> {
+            searchField.setText(homeSearch.getText());
+            currentCategory = "전체";
+            showPage("market");
+            SwingUtilities.invokeLater(() -> searchField.setText(homeSearch.getText()));
+        });
+        search.add(homeSearch, BorderLayout.CENTER);
+        search.add(go, BorderLayout.EAST);
+        JPanel searchWrap = new JPanel(new BorderLayout());
+        searchWrap.setBackground(Color.WHITE);
+        searchWrap.setBorder(new EmptyBorder(25, 0, 0, 0));
+        searchWrap.add(search);
+        top.add(searchWrap, BorderLayout.CENTER);
+
+        JPanel center = new JPanel();
+        center.setBackground(PALE);
+        center.setBorder(new EmptyBorder(25, 20, 25, 20));
+        center.setLayout(new BoxLayout(center, BoxLayout.Y_AXIS));
+
+        JPanel welcome = new JPanel();
+        welcome.setLayout(new BoxLayout(welcome, BoxLayout.Y_AXIS));
+        welcome.setBackground(PALE);
+        welcome.add(label("필요한 물건,", 23, true, TEXT));
+        welcome.add(label("우리 학교에서 함께 나눠요.", 23, true, TEXT));
+        welcome.add(Box.createVerticalStrut(8));
+        welcome.add(label("대여하고 교환하며 더 가벼운 대학생활", 12, false, MUTED));
+        center.add(welcome);
+        center.add(Box.createVerticalStrut(28));
+
+        JPanel choices = new JPanel(new GridLayout(1, 2, 14, 0));
+        choices.setBackground(PALE);
+        choices.add(categoryTile("대여", "필요한 기간만큼\n빌려 사용해요", "↗", new Color(232, 239, 255), () -> {
+            currentCategory = "대여"; showPage("market");
+        }));
+        choices.add(categoryTile("물물교환", "필요 없는 물건을\n새로운 물건으로", "⇄", new Color(235, 246, 239), () -> {
+            currentCategory = "물물교환"; showPage("market");
+        }));
+        center.add(choices);
+        center.add(Box.createVerticalStrut(25));
+
+        JPanel recentHead = new JPanel(new BorderLayout());
+        recentHead.setBackground(PALE);
+        recentHead.add(label("최근 등록된 상품", 17, true, TEXT), BorderLayout.WEST);
+        JButton more = button("더 보기  ›", PALE, BLUE);
+        more.setBorder(new EmptyBorder(0, 0, 0, 0));
+        more.addActionListener(e -> { currentCategory = "전체"; showPage("market"); });
+        recentHead.add(more, BorderLayout.EAST);
+        center.add(recentHead);
+        center.add(Box.createVerticalStrut(10));
+
+        int shown = Math.min(2, products.size());
+        for (int i = products.size() - 1; i >= Math.max(0, products.size() - shown); i--) {
+            center.add(compactProduct(products.get(i)));
+            center.add(Box.createVerticalStrut(9));
+        }
+        JScrollPane scroll = new JScrollPane(center);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        page.add(top, BorderLayout.NORTH);
+        page.add(scroll, BorderLayout.CENTER);
+        page.add(bottomNav(), BorderLayout.SOUTH);
+        return page;
+    }
+
+    private JPanel categoryTile(String title, String desc, String symbol, Color bg, Runnable action) {
+        JPanel tile = new JPanel(new BorderLayout());
+        tile.setBackground(bg);
+        tile.setBorder(new EmptyBorder(18, 15, 18, 15));
+        tile.setPreferredSize(new Dimension(170, 150));
+        JPanel t = new JPanel();
+        t.setOpaque(false);
+        t.setLayout(new BoxLayout(t, BoxLayout.Y_AXIS));
+        t.add(label(title, 19, true, NAVY));
+        t.add(Box.createVerticalStrut(9));
+        t.add(label("<html>" + desc.replace("\n", "<br>") + "</html>", 12, false, MUTED));
+        tile.add(t, BorderLayout.CENTER);
+        JLabel s = label(symbol, 30, true, BLUE);
+        tile.add(s, BorderLayout.EAST);
+        tile.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        tile.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { action.run(); } });
+        return tile;
+    }
+
+    // -------------------- 상품 목록 --------------------
+
+    private JPanel createMarketPage() {
+        JPanel page = pagePanel();
+        JPanel top = new JPanel();
+        top.setBackground(Color.WHITE);
+        top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
+        top.setBorder(new EmptyBorder(15, 18, 12, 18));
+        top.add(label("상품 둘러보기", 21, true, NAVY));
+        top.add(Box.createVerticalStrut(12));
+
+        JPanel search = new JPanel(new BorderLayout(8, 0));
+        search.setBackground(PALE);
+        search.setBorder(new CompoundBorder(new LineBorder(new Color(225, 228, 235), 1, true),
+                new EmptyBorder(5, 12, 5, 10)));
+        searchField.setFont(new Font("맑은 고딕", Font.PLAIN, 14));
+        searchField.setBorder(null);
+        searchField.setBackground(PALE);
+        searchField.setToolTipText("상품명, 카테고리, 설명 검색");
+        search.add(searchField, BorderLayout.CENTER);
+        search.add(label("⌕", 23, true, MUTED), BorderLayout.EAST);
+        top.add(search);
+        top.add(Box.createVerticalStrut(12));
+
+        JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 7, 0));
+        filters.setBackground(Color.WHITE);
+        String[] categories = {"전체", "대여", "물물교환", "도서", "생활용품", "학업/실습"};
+        for (String c : categories) {
+            JButton f = button(c, c.equals(currentCategory) ? BLUE : PALE,
+                    c.equals(currentCategory) ? Color.WHITE : TEXT);
+            f.setFont(new Font("맑은 고딕", Font.PLAIN, 12));
+            f.setBorder(new EmptyBorder(7, 12, 7, 12));
+            f.addActionListener(e -> { currentCategory = c; showPage("market"); });
+            filters.add(f);
+        }
+        top.add(filters);
+        page.add(top, BorderLayout.NORTH);
+
+        productListPanel.setLayout(new BoxLayout(productListPanel, BoxLayout.Y_AXIS));
+        productListPanel.setBackground(PALE);
+        productListPanel.setBorder(new EmptyBorder(14, 16, 14, 16));
+        JScrollPane scroll = new JScrollPane(productListPanel);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        page.add(scroll, BorderLayout.CENTER);
+
+        JPanel bottom = new JPanel(new BorderLayout(8, 0));
+        bottom.setBackground(Color.WHITE);
+        bottom.setBorder(new EmptyBorder(10, 16, 10, 16));
+        JButton add = button("+ 상품 등록하기", BLUE, Color.WHITE);
+        add.addActionListener(e -> openRegisterDialog());
+        bottom.add(add, BorderLayout.CENTER);
+        bottom.add(bottomNav(), BorderLayout.SOUTH);
+        page.add(bottom, BorderLayout.SOUTH);
+
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent e) { refreshProducts(); }
+            public void removeUpdate(DocumentEvent e) { refreshProducts(); }
+            public void changedUpdate(DocumentEvent e) { refreshProducts(); }
+        });
+        refreshProducts();
+        return page;
+    }
+
+    private void refreshProducts() {
+        if (productListPanel == null) return;
+        productListPanel.removeAll();
+        String query = searchField.getText() == null ? "" : searchField.getText().trim().toLowerCase();
+        int count = 0;
+        for (Product p : products) {
+            boolean categoryMatch = "전체".equals(currentCategory)
+                    || ("대여".equals(currentCategory) && "대여".equals(p.type))
+                    || ("물물교환".equals(currentCategory) && "물물교환".equals(p.type))
+                    || currentCategory.equals(p.category);
+            String searchable = (p.name + " " + p.category + " " + p.description + " " + p.type).toLowerCase();
+            if (categoryMatch && searchable.contains(query)) {
+                productListPanel.add(compactProduct(p));
+                productListPanel.add(Box.createVerticalStrut(10));
+                count++;
+            }
+        }
+        if (count == 0) {
+            JPanel empty = new JPanel();
+            empty.setOpaque(false);
+            empty.setBorder(new EmptyBorder(45, 5, 45, 5));
+            empty.add(label("검색 결과가 없습니다.", 14, false, MUTED));
+            productListPanel.add(empty);
+        }
+        productListPanel.revalidate();
+        productListPanel.repaint();
+    }
+
+    private JPanel compactProduct(Product p) {
+        JPanel card = new JPanel(new BorderLayout(12, 0));
+        card.setBackground(Color.WHITE);
+        card.setBorder(new CompoundBorder(new LineBorder(new Color(232, 234, 239), 1, true),
+                new EmptyBorder(10, 10, 10, 10)));
+        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 118));
+        card.setPreferredSize(new Dimension(360, 118));
+        JPanel photo = imageBox(p, 92, 92);
+        card.add(photo, BorderLayout.WEST);
+
+        JPanel info = new JPanel();
+        info.setBackground(Color.WHITE);
+        info.setLayout(new BoxLayout(info, BoxLayout.Y_AXIS));
+        JPanel top = new JPanel(new BorderLayout());
+        top.setBackground(Color.WHITE);
+        top.add(label(p.name, 14, true, TEXT), BorderLayout.CENTER);
+        JButton heart = new JButton(p.favorite ? "♥" : "♡");
+        heart.setForeground(p.favorite ? new Color(238, 85, 112) : MUTED);
+        heart.setBackground(Color.WHITE);
+        heart.setBorder(null);
+        heart.setFocusPainted(false);
+        heart.addActionListener(e -> { p.favorite = !p.favorite; saveData(); heart.setText(p.favorite ? "♥" : "♡"); heart.setForeground(p.favorite ? new Color(238,85,112) : MUTED); });
+        top.add(heart, BorderLayout.EAST);
+        info.add(top);
+        info.add(Box.createVerticalStrut(5));
+        info.add(label(p.type + "  ·  " + p.category, 11, false, MUTED));
+        info.add(Box.createVerticalStrut(7));
+        info.add(label(p.type.equals("대여") ? money(p.price) + " / 보증금 " + money(p.deposit) : "교환 희망 물품 협의", 12, true, BLUE));
+        info.add(Box.createVerticalStrut(5));
+        info.add(label("상품 상태: " + p.condition, 11, false, MUTED));
+        card.add(info, BorderLayout.CENTER);
+        card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        MouseAdapter openProduct = new MouseAdapter() {
+            public void mouseClicked(MouseEvent e) { selectedProduct = p; openDetailDialog(p); }
+        };
+        card.addMouseListener(openProduct);
+        info.addMouseListener(openProduct);
+        photo.addMouseListener(openProduct);
+        return card;
+    }
+
+    private JPanel imageBox(Product p, int w, int h) {
+        JPanel box = new JPanel(new BorderLayout());
+        box.setPreferredSize(new Dimension(w, h));
+        box.setBackground(new Color(238, 241, 247));
+        box.setBorder(new LineBorder(new Color(230, 232, 237), 1, true));
+        if (p.imagePath != null && !p.imagePath.isEmpty() && new File(p.imagePath).exists()) {
+            ImageIcon icon = new ImageIcon(p.imagePath);
+            Image scaled = icon.getImage().getScaledInstance(w, h, Image.SCALE_SMOOTH);
+            box.add(new JLabel(new ImageIcon(scaled)), BorderLayout.CENTER);
+        } else {
+            JLabel placeholder = label("상품\n사진", 13, true, new Color(160, 167, 180));
+            placeholder.setHorizontalAlignment(SwingConstants.CENTER);
+            box.add(placeholder, BorderLayout.CENTER);
+        }
+        return box;
+    }
+
+    // -------------------- 상품 상세 / 등록 --------------------
+
+    private void openDetailDialog(Product p) {
+        JDialog d = new JDialog(this, "상품 정보", true);
+        d.setSize(390, 680);
+        d.setLocationRelativeTo(this);
+        JPanel body = new JPanel();
+        body.setBackground(Color.WHITE);
+        body.setBorder(new EmptyBorder(18, 20, 18, 20));
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+
+        JPanel image = imageBox(p, 330, 205);
+        image.setMaximumSize(new Dimension(330, 205));
+        image.setAlignmentX(Component.LEFT_ALIGNMENT);
+        body.add(image);
+        body.add(Box.createVerticalStrut(16));
+
+        JPanel nameLine = new JPanel(new BorderLayout());
+        nameLine.setBackground(Color.WHITE);
+        nameLine.add(label(p.name, 20, true, TEXT), BorderLayout.CENTER);
+        JButton heart = button(p.favorite ? "♥" : "♡", Color.WHITE, new Color(238, 85, 112));
+        heart.setFont(new Font("맑은 고딕", Font.PLAIN, 24));
+        heart.setBorder(new EmptyBorder(0, 8, 0, 8));
+        heart.addActionListener(e -> {
+            p.favorite = !p.favorite;
+            heart.setText(p.favorite ? "♥" : "♡");
+            saveData();
+        });
+        nameLine.add(heart, BorderLayout.EAST);
+        body.add(nameLine);
+        body.add(Box.createVerticalStrut(8));
+        body.add(label(p.type + "  ·  " + p.category + "  ·  " + p.condition, 12, false, MUTED));
+        body.add(Box.createVerticalStrut(12));
+        body.add(new JSeparator());
+        body.add(Box.createVerticalStrut(12));
+        body.add(label("상세 정보", 15, true, TEXT));
+        body.add(Box.createVerticalStrut(9));
+        body.add(label(p.type.equals("대여") ? "대여료: " + money(p.price) : "교환 희망: 물품 협의", 13, false, TEXT));
+        if (p.type.equals("대여")) {
+            body.add(Box.createVerticalStrut(7));
+            body.add(label("보증금: " + money(p.deposit), 13, false, TEXT));
+        }
+        body.add(Box.createVerticalStrut(10));
+        JTextArea desc = new JTextArea(p.description);
+        desc.setFont(new Font("맑은 고딕", Font.PLAIN, 13));
+        desc.setForeground(TEXT);
+        desc.setLineWrap(true);
+        desc.setWrapStyleWord(true);
+        desc.setEditable(false);
+        desc.setOpaque(false);
+        desc.setRows(4);
+        body.add(desc);
+        body.add(Box.createVerticalStrut(10));
+        body.add(label("판매자: " + p.owner, 12, false, MUTED));
+        body.add(Box.createVerticalGlue());
+
+        JButton chat = button("채팅하기", BLUE, Color.WHITE);
+        chat.setAlignmentX(Component.CENTER_ALIGNMENT);
+        chat.addActionListener(e -> openChatDialog(p));
+        body.add(chat);
+
+        d.setContentPane(body);
+        d.setVisible(true);
+    }
+
+    private void openRegisterDialog() {
+        final JDialog d = new JDialog(this, "상품 등록", true);
+        d.setSize(390, 720);
+        d.setLocationRelativeTo(this);
+        JPanel form = new JPanel();
+        form.setBackground(Color.WHITE);
+        form.setBorder(new EmptyBorder(18, 22, 18, 22));
+        form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+
+        JLabel imagePreview = label("사진을 선택해 주세요", 12, false, MUTED);
+        imagePreview.setHorizontalAlignment(SwingConstants.CENTER);
+        imagePreview.setPreferredSize(new Dimension(130, 105));
+        imagePreview.setMaximumSize(new Dimension(330, 105));
+        imagePreview.setOpaque(true);
+        imagePreview.setBackground(PALE);
+        imagePreview.setBorder(new LineBorder(new Color(225, 228, 235), 1, true));
+        final String[] imagePath = {""};
+        JButton chooseImage = button("사진 선택", PALE, TEXT);
+        chooseImage.addActionListener(e -> {
+            JFileChooser chooser = new JFileChooser();
+            chooser.setDialogTitle("상품 사진 선택");
+            int result = chooser.showOpenDialog(d);
+            if (result == JFileChooser.APPROVE_OPTION) {
+                File file = chooser.getSelectedFile();
+                imagePath[0] = file.getAbsolutePath();
+                ImageIcon icon = new ImageIcon(imagePath[0]);
+                Image scaled = icon.getImage().getScaledInstance(120, 95, Image.SCALE_SMOOTH);
+                imagePreview.setIcon(new ImageIcon(scaled));
+                imagePreview.setText("");
+            }
+        });
+        form.add(imagePreview);
+        form.add(Box.createVerticalStrut(7));
+        form.add(chooseImage);
+        form.add(Box.createVerticalStrut(14));
+
+        JTextField name = addField(form, "상품명", "예: 전공 서적, 전기포트");
+        JComboBox<String> type = addCombo(form, "거래 유형", new String[]{"대여", "물물교환"});
+        JComboBox<String> category = addCombo(form, "카테고리", new String[]{"도서", "생활용품", "학업/실습", "문구", "의류", "기타"});
+        JComboBox<String> condition = addCombo(form, "상품 상태", new String[]{"새 상품", "매우 좋음", "좋음", "사용감 있음"});
+        JTextField price = addField(form, "대여료 (원)", "대여 상품이 아니면 0");
+        JTextField deposit = addField(form, "보증금 (원)", "대여 상품이 아니면 0");
+        form.add(label("상품 설명", 12, true, TEXT));
+        form.add(Box.createVerticalStrut(5));
+        JTextArea description = new JTextArea(4, 20);
+        description.setFont(new Font("맑은 고딕", Font.PLAIN, 13));
+        description.setLineWrap(true);
+        description.setWrapStyleWord(true);
+        description.setBorder(new CompoundBorder(new LineBorder(new Color(220, 224, 232), 1, true), new EmptyBorder(8, 9, 8, 9)));
+        form.add(new JScrollPane(description));
+        form.add(Box.createVerticalStrut(15));
+        JButton submit = button("등록하기", BLUE, Color.WHITE);
+        submit.addActionListener(e -> {
+            String productName = name.getText().trim();
+            if (productName.isEmpty()) {
+                JOptionPane.showMessageDialog(d, "상품명을 입력해 주세요.");
+                return;
+            }
+            int p = parseMoney(price.getText());
+            int dep = parseMoney(deposit.getText());
+            if (p < 0 || dep < 0) {
+                JOptionPane.showMessageDialog(d, "가격과 보증금은 숫자로 입력해 주세요.");
+                return;
+            }
+            String selectedType = (String) type.getSelectedItem();
+            if (!"대여".equals(selectedType)) { p = 0; dep = 0; }
+            Product product = new Product(productName, (String) category.getSelectedItem(),
+                    selectedType, description.getText().trim(), (String) condition.getSelectedItem(),
+                    p, dep, imagePath[0]);
+            products.add(0, product);
+            saveData();
+            d.dispose();
+            currentCategory = "전체";
+            searchField.setText("");
+            showPage("market");
+            JOptionPane.showMessageDialog(this, "상품이 등록되었습니다!");
+        });
+        form.add(submit);
+
+        JScrollPane scroll = new JScrollPane(form);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(15);
+        d.setContentPane(scroll);
+        d.setVisible(true);
+    }
+
+    private JTextField addField(JPanel parent, String title, String hint) {
+        parent.add(label(title, 12, true, TEXT));
+        parent.add(Box.createVerticalStrut(5));
+        JTextField field = new JTextField();
+        field.setFont(new Font("맑은 고딕", Font.PLAIN, 13));
+        field.setToolTipText(hint);
+        field.setBorder(new CompoundBorder(new LineBorder(new Color(220, 224, 232), 1, true), new EmptyBorder(9, 10, 9, 10)));
+        parent.add(field);
+        parent.add(Box.createVerticalStrut(10));
+        return field;
+    }
+
+    private JComboBox<String> addCombo(JPanel parent, String title, String[] values) {
+        parent.add(label(title, 12, true, TEXT));
+        parent.add(Box.createVerticalStrut(5));
+        JComboBox<String> combo = new JComboBox<String>(values);
+        combo.setFont(new Font("맑은 고딕", Font.PLAIN, 13));
+        combo.setBackground(Color.WHITE);
+        parent.add(combo);
+        parent.add(Box.createVerticalStrut(10));
+        return combo;
+    }
+
+    private int parseMoney(String value) {
+        if (value == null || value.trim().isEmpty()) return 0;
+        try { return Integer.parseInt(value.replace(",", "").trim()); }
+        catch (NumberFormatException e) { return -1; }
+    }
+
+    // -------------------- 채팅 --------------------
+
+    private void openChatDialog(Product p) {
+        final JDialog d = new JDialog(this, p.name + " 채팅", false);
+        d.setSize(380, 570);
+        d.setLocationRelativeTo(this);
+        JPanel main = new JPanel(new BorderLayout());
+        main.setBackground(PALE);
+        JPanel top = new JPanel(new BorderLayout());
+        top.setBackground(Color.WHITE);
+        top.setBorder(new EmptyBorder(13, 16, 13, 16));
+        top.add(label("‹   " + p.owner, 16, true, NAVY), BorderLayout.CENTER);
+        top.add(label("상품 문의", 11, false, MUTED), BorderLayout.EAST);
+        main.add(top, BorderLayout.NORTH);
+
+        JPanel messages = new JPanel();
+        messages.setBackground(PALE);
+        messages.setBorder(new EmptyBorder(14, 12, 14, 12));
+        messages.setLayout(new BoxLayout(messages, BoxLayout.Y_AXIS));
+        Runnable renderMessages = () -> {
+            messages.removeAll();
+            if (p.messages.isEmpty()) {
+                messages.add(Box.createVerticalStrut(25));
+                JLabel welcome = label("상품에 대해 궁금한 점을 물어보세요!", 12, false, MUTED);
+                welcome.setAlignmentX(Component.CENTER_ALIGNMENT);
+                messages.add(welcome);
+            } else {
+                for (String msg : p.messages) {
+                    JPanel bubble = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 3));
+                    bubble.setOpaque(false);
+                    JLabel text = label(msg, 13, false, TEXT);
+                    text.setOpaque(true);
+                    text.setBackground(new Color(222, 232, 255));
+                    text.setBorder(new EmptyBorder(9, 12, 9, 12));
+                    bubble.add(text);
+                    bubble.setAlignmentX(Component.RIGHT_ALIGNMENT);
+                    messages.add(bubble);
+                }
+            }
+            messages.revalidate();
+            messages.repaint();
+        };
+        renderMessages.run();
+        JScrollPane scroll = new JScrollPane(messages);
+        scroll.setBorder(null);
+        main.add(scroll, BorderLayout.CENTER);
+
+        JPanel sendPanel = new JPanel(new BorderLayout(8, 0));
+        sendPanel.setBackground(Color.WHITE);
+        sendPanel.setBorder(new EmptyBorder(10, 12, 10, 12));
+        JTextField input = new JTextField();
+        input.setFont(new Font("맑은 고딕", Font.PLAIN, 13));
+        input.setBorder(new CompoundBorder(new LineBorder(new Color(225, 228, 235), 1, true), new EmptyBorder(9, 10, 9, 10)));
+        JButton send = button("전송", BLUE, Color.WHITE);
+        ActionListener sendAction = e -> {
+            String msg = input.getText().trim();
+            if (!msg.isEmpty()) {
+                p.messages.add(msg);
+                saveData();
+                input.setText("");
+                renderMessages.run();
+                SwingUtilities.invokeLater(() -> scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum()));
+            }
+        };
+        send.addActionListener(sendAction);
+        input.addActionListener(sendAction);
+        sendPanel.add(input, BorderLayout.CENTER);
+        sendPanel.add(send, BorderLayout.EAST);
+        main.add(sendPanel, BorderLayout.SOUTH);
+        d.setContentPane(main);
+        d.setVisible(true);
+    }
+
+    // -------------------- 마이페이지 --------------------
+
+    private JPanel createMyPage() {
+        JPanel page = pagePanel();
+        page.add(header("마이페이지", false), BorderLayout.NORTH);
+        JPanel body = new JPanel();
+        body.setBackground(PALE);
+        body.setBorder(new EmptyBorder(22, 18, 22, 18));
+        body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+
+        JPanel profile = new JPanel(new BorderLayout());
+        profile.setBackground(Color.WHITE);
+        profile.setBorder(new EmptyBorder(18, 16, 18, 16));
+        profile.add(label("●", 34, true, BLUE), BorderLayout.WEST);
+        JPanel who = new JPanel();
+        who.setBackground(Color.WHITE);
+        who.setLayout(new BoxLayout(who, BoxLayout.Y_AXIS));
+        who.add(label("충남대 학생", 16, true, TEXT));
+        who.add(Box.createVerticalStrut(5));
+        who.add(label("ShareMate 이용자", 12, false, MUTED));
+        profile.add(who, BorderLayout.CENTER);
+        body.add(profile);
+        body.add(Box.createVerticalStrut(15));
+
+        int favorites = 0, mine = 0;
+        for (Product p : products) if (p.favorite) favorites++;
+        JPanel stats = new JPanel(new GridLayout(1, 2, 10, 0));
+        stats.setBackground(PALE);
+        stats.add(statCard("등록 상품", products.size() + "개"));
+        stats.add(statCard("찜한 상품", favorites + "개"));
+        body.add(stats);
+        body.add(Box.createVerticalStrut(18));
+        body.add(label("나의 활동", 16, true, TEXT));
+        body.add(Box.createVerticalStrut(8));
+        JButton fav = menuButton("♡   찜한 상품 보기");
+        fav.addActionListener(e -> showFavorites());
+        body.add(fav);
+        body.add(Box.createVerticalStrut(8));
+        JButton registered = menuButton("▣   등록한 상품 보기");
+        registered.addActionListener(e -> { currentCategory = "전체"; showPage("market"); });
+        body.add(registered);
+        body.add(Box.createVerticalStrut(8));
+        JButton chats = menuButton("☏   상품 문의 채팅");
+        chats.addActionListener(e -> showChatProducts());
+        body.add(chats);
+        body.add(Box.createVerticalGlue());
+
+        JScrollPane scroll = new JScrollPane(body);
+        scroll.setBorder(null);
+        page.add(scroll, BorderLayout.CENTER);
+        page.add(bottomNav(), BorderLayout.SOUTH);
+        return page;
+    }
+
+    private JPanel statCard(String title, String value) {
+        JPanel p = new JPanel();
+        p.setBackground(Color.WHITE);
+        p.setBorder(new EmptyBorder(15, 12, 15, 12));
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.add(label(title, 12, false, MUTED));
+        p.add(Box.createVerticalStrut(7));
+        p.add(label(value, 20, true, BLUE));
+        return p;
+    }
+
+    private JButton menuButton(String text) {
+        JButton b = new JButton(text + "     ›");
+        b.setHorizontalAlignment(SwingConstants.LEFT);
+        b.setFont(new Font("맑은 고딕", Font.PLAIN, 14));
+        b.setBackground(Color.WHITE);
+        b.setForeground(TEXT);
+        b.setBorder(new EmptyBorder(15, 14, 15, 14));
+        b.setFocusPainted(false);
+        return b;
+    }
+
+    private void showFavorites() {
+        List<Product> favs = new ArrayList<Product>();
+        for (Product p : products) if (p.favorite) favs.add(p);
+        showProductSelection("찜한 상품", favs);
+    }
+
+    private void showChatProducts() {
+        List<Product> chats = new ArrayList<Product>();
+        for (Product p : products) if (!p.messages.isEmpty()) chats.add(p);
+        showProductSelection("채팅 내역", chats);
+    }
+
+    private void showProductSelection(String title, List<Product> list) {
+        JDialog d = new JDialog(this, title, true);
+        d.setSize(370, 500);
+        d.setLocationRelativeTo(this);
+        JPanel panel = new JPanel();
+        panel.setBackground(PALE);
+        panel.setBorder(new EmptyBorder(15, 15, 15, 15));
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.add(label(title, 19, true, NAVY));
+        panel.add(Box.createVerticalStrut(12));
+        if (list.isEmpty()) panel.add(label("아직 표시할 항목이 없습니다.", 13, false, MUTED));
+        for (Product p : list) {
+            JButton b = menuButton(p.name);
+            b.addActionListener(e -> { d.dispose(); if (title.equals("채팅 내역")) openChatDialog(p); else openDetailDialog(p); });
+            panel.add(b);
+            panel.add(Box.createVerticalStrut(7));
+        }
+        d.setContentPane(new JScrollPane(panel));
+        d.setVisible(true);
+    }
+
+    private String money(int amount) {
+        return new DecimalFormat("#,###").format(amount) + "원";
+    }
+
+    public static void main(String[] args) {
+        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
+        catch (Exception ignored) {}
+        SwingUtilities.invokeLater(() -> new ShareMateApp());
+    }
+}
