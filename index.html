@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#12B886">
+<title>쉐어메이트 · 빌리고, 나누고, 바꾸고!</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage">
+  <aside class="side">
+    <div class="logo-big">쉐어<br>메이트</div>
+    <p>빌리고, 나누고, 바꾸고!<br>물품 대여 · 물물교환 앱</p>
+    <ul>
+      <li>왼쪽 휴대폰 화면에서 직접 눌러보세요</li>
+      <li>firebase-config.js를 채우면 Google 로그인·실시간 채팅이 켜지고, 비우면 이 브라우저 안에서만 동작하는 데모 계정 모드예요</li>
+      <li>MY → 데이터 초기화로 처음 상태(첫 접속 안내 포함)로 돌아가요</li>
+    </ul>
+  </aside>
+  <div id="app">
+    <div id="view"></div>
+    <div id="layer"></div>
+    <div id="onb"></div>
+    <div id="toast"></div>
+  </div>
+</div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="backend.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
